@@ -3,30 +3,25 @@ import path from 'node:path';
 import type { Request, Response } from 'express';
 import type { Document, Prisma } from '../generated/prisma/client.js';
 import { prisma } from '../lib/prisma.js';
-import { NotFoundError, ValidationError } from '../lib/errors.js';
+import { ValidationError } from '../lib/errors.js';
 import { uploadDir } from '../middleware/upload.middleware.js';
 import { analyzeDocumentText } from '../services/aiAnalysisService.js';
+import {
+  getDocumentById,
+  getDocumentFileMeta,
+  listDocumentTopics,
+  listDocuments as listDocumentsFromService,
+  DEFAULT_DOCUMENT_LIMIT,
+  DEFAULT_DOCUMENT_PAGE,
+  MAX_DOCUMENT_LIMIT,
+  type DocumentListFilters,
+  type DocumentTypeFilter,
+} from '../services/documentService.js';
 import { parseDocument } from '../services/documentParserService.js';
-import type {
-  DocumentAnalysisResponse,
-  DocumentDetailResponse,
-  DocumentRecordResponse,
-  DocumentSummaryResponse,
-} from '../types/document.js';
+import type { DocumentRecordResponse } from '../types/document.js';
+import { NotFoundError } from '../lib/errors.js';
 
-type DocumentWithRelations = Document & {
-  content: {
-    text: string;
-    wordCount: number;
-  } | null;
-  analysis: {
-    summary: string;
-    topics: string[];
-    entities: unknown;
-    extractedData: unknown;
-    createdAt: Date;
-  } | null;
-};
+const DOCUMENT_TYPE_FILTERS = new Set<DocumentTypeFilter>(['pdf', 'docx', 'image', 'txt']);
 
 function serializeDocument(document: Document): DocumentRecordResponse {
   return {
@@ -40,62 +35,6 @@ function serializeDocument(document: Document): DocumentRecordResponse {
   };
 }
 
-function serializeDocumentSummary(document: Document): DocumentSummaryResponse {
-  return {
-    id: document.id,
-    originalName: document.originalName,
-    uploadedAt: document.uploadedAt.toISOString(),
-  };
-}
-
-function serializeDocumentDetailWithAnalysis(
-  document: DocumentWithRelations,
-): DocumentDetailResponse {
-  if (!document.content) {
-    throw new NotFoundError('Document content not found');
-  }
-
-  return {
-    id: document.id,
-    filename: document.originalName,
-    mimeType: document.mimeType,
-    fileSize: Number(document.fileSize),
-    uploadedAt: document.uploadedAt.toISOString(),
-    updatedAt: document.updatedAt.toISOString(),
-    wordCount: document.content.wordCount,
-    text: document.content.text,
-    analysis: document.analysis ? serializeDocumentAnalysis(document.analysis) : null,
-  };
-}
-
-function serializeDocumentAnalysis(
-  analysis: NonNullable<DocumentWithRelations['analysis']>,
-): DocumentAnalysisResponse {
-  return {
-    summary: analysis.summary,
-    topics: analysis.topics,
-    entities: normalizeStringArray(analysis.entities),
-    extractedData: normalizeExtractedData(analysis.extractedData),
-    createdAt: analysis.createdAt.toISOString(),
-  };
-}
-
-function normalizeStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.filter((item): item is string => typeof item === 'string');
-}
-
-function normalizeExtractedData(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return {};
-  }
-
-  return value as Record<string, unknown>;
-}
-
 function getRouteParam(value: string | string[] | undefined, name: string): string {
   if (typeof value === 'string') {
     return value;
@@ -104,43 +43,108 @@ function getRouteParam(value: string | string[] | undefined, name: string): stri
   throw new ValidationError(`Invalid ${name}`);
 }
 
-export async function listDocuments(_req: Request, res: Response): Promise<void> {
-  const documents = await prisma.document.findMany({
-    orderBy: { uploadedAt: 'desc' },
-  });
+function parseQueryString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
 
-  res.status(200).json(documents.map(serializeDocumentSummary));
+function parseDocumentType(value: unknown): DocumentTypeFilter | undefined {
+  const raw = parseQueryString(value)?.toLowerCase();
+
+  if (!raw || raw === 'all') {
+    return undefined;
+  }
+
+  if (!DOCUMENT_TYPE_FILTERS.has(raw as DocumentTypeFilter)) {
+    throw new ValidationError('Invalid document type filter', {
+      type: raw,
+      allowed: Array.from(DOCUMENT_TYPE_FILTERS),
+    });
+  }
+
+  return raw as DocumentTypeFilter;
+}
+
+function parseTopics(value: unknown): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const values = Array.isArray(value) ? value : [value];
+  const topics = values
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  return topics.length > 0 ? topics : undefined;
+}
+
+function parsePositiveInt(value: unknown, fallback: number, max?: number): number {
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    return fallback;
+  }
+
+  const parsed = typeof value === 'number' ? value : Number.parseInt(value, 10);
+
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return fallback;
+  }
+
+  const normalized = Math.floor(parsed);
+  return max ? Math.min(normalized, max) : normalized;
+}
+
+function parseListFilters(query: Request['query']): DocumentListFilters {
+  const filters: DocumentListFilters = {};
+  const q = parseQueryString(query.q);
+  const type = parseDocumentType(query.type);
+  const topics = parseTopics(query.topic);
+
+  if (q) {
+    filters.q = q;
+  }
+
+  if (type) {
+    filters.type = type;
+  }
+
+  if (topics) {
+    filters.topics = topics;
+  }
+
+  filters.page = parsePositiveInt(query.page, DEFAULT_DOCUMENT_PAGE);
+  filters.limit = parsePositiveInt(query.limit, DEFAULT_DOCUMENT_LIMIT, MAX_DOCUMENT_LIMIT);
+
+  return filters;
+}
+
+export async function listDocuments(req: Request, res: Response): Promise<void> {
+  const documents = await listDocumentsFromService(parseListFilters(req.query));
+  res.status(200).json(documents);
+}
+
+export async function searchDocuments(req: Request, res: Response): Promise<void> {
+  const documents = await listDocumentsFromService(parseListFilters(req.query));
+  res.status(200).json(documents);
+}
+
+export async function listTopics(_req: Request, res: Response): Promise<void> {
+  const topics = await listDocumentTopics();
+  res.status(200).json(topics);
 }
 
 export async function getDocument(req: Request, res: Response): Promise<void> {
   const id = getRouteParam(req.params.id, 'document id');
-
-  const document = await prisma.document.findUnique({
-    where: { id },
-    include: { content: true, analysis: true },
-  });
-
-  if (!document) {
-    throw new NotFoundError('Document not found');
-  }
+  const document = await getDocumentById(id);
 
   res.status(200).json({
     success: true,
-    data: serializeDocumentDetailWithAnalysis(document),
+    data: document,
   });
 }
 
 export async function serveDocumentFile(req: Request, res: Response): Promise<void> {
   const id = getRouteParam(req.params.id, 'document id');
-
-  const document = await prisma.document.findUnique({
-    where: { id },
-  });
-
-  if (!document) {
-    throw new NotFoundError('Document not found');
-  }
-
+  const document = await getDocumentFileMeta(id);
   const filePath = path.join(uploadDir, document.storedName);
 
   try {
@@ -164,13 +168,9 @@ export async function createDocument(req: Request, res: Response): Promise<void>
   const storedPath = path.join(uploadDir, file.filename);
 
   try {
-    // 1–2. File already on disk via Multer — extract text
     const parsed = await parseDocument(storedPath, { mimeType: file.mimetype });
-
-    // 5. Analyze via AI service (never call Gemini from the controller)
     const analysis = await analyzeDocumentText(parsed.text);
 
-    // 3–4 + 6. Persist Document, Content, and Analysis atomically
     const document = await prisma.$transaction(async (tx) => {
       const created = await tx.document.create({
         data: {

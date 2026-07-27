@@ -1,4 +1,4 @@
-/** Full document payload returned by GET /documents/:id */
+/** AI analysis returned by GET /documents/:id */
 export interface DocumentAnalysisResponse {
   summary: string;
   topics: string[];
@@ -7,15 +7,20 @@ export interface DocumentAnalysisResponse {
   createdAt: string;
 }
 
+/** Nested detail payload returned by GET /documents/:id */
 export interface DocumentDetailResponse {
-  id: string;
-  filename: string;
-  mimeType: string;
-  fileSize: number;
-  uploadedAt: string;
-  updatedAt: string;
-  wordCount: number;
-  text: string;
+  document: {
+    id: string;
+    filename: string;
+    mimeType: string;
+    fileSize: number;
+    uploadedAt: string;
+    updatedAt: string;
+  };
+  content: {
+    text: string;
+    wordCount: number;
+  };
   analysis: DocumentAnalysisResponse | null;
 }
 
@@ -28,7 +33,21 @@ export interface DocumentDetailApiResponse {
 export interface DocumentSummaryResponse {
   id: string;
   originalName: string;
+  mimeType: string;
   uploadedAt: string;
+  analysis: {
+    topics: string[];
+    summary: string;
+  } | null;
+}
+
+/** Paginated list returned by GET /documents */
+export interface DocumentListPageResponse {
+  documents: DocumentSummaryResponse[];
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
 }
 
 /** Metadata returned after upload (POST /documents) */

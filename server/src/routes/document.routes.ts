@@ -3,6 +3,8 @@ import {
   createDocument,
   getDocument,
   listDocuments,
+  listTopics,
+  searchDocuments,
   serveDocumentFile,
 } from '../controllers/document.controller.js';
 import { asyncHandler } from '../middleware/error.middleware.js';
@@ -17,6 +19,8 @@ const uploadHandlers = [
 ] as const;
 
 router.get('/', asyncHandler(listDocuments));
+router.get('/search', asyncHandler(searchDocuments));
+router.get('/topics', asyncHandler(listTopics));
 router.get('/:id/file', asyncHandler(serveDocumentFile));
 router.get('/:id', asyncHandler(getDocument));
 router.post('/', ...uploadHandlers);
