@@ -67,3 +67,10 @@ export class DocumentParseError extends AppError {
     this.name = 'DocumentParseError';
   }
 }
+
+export class AiServiceError extends AppError {
+  constructor(message = 'AI service request failed', details?: unknown) {
+    super(502, message, { details });
+    this.name = 'AiServiceError';
+  }
+}

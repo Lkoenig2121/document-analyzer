@@ -1,4 +1,12 @@
 /** Full document payload returned by GET /documents/:id */
+export interface DocumentAnalysisResponse {
+  summary: string;
+  topics: string[];
+  entities: string[];
+  extractedData: Record<string, unknown>;
+  createdAt: string;
+}
+
 export interface DocumentDetailResponse {
   id: string;
   filename: string;
@@ -8,6 +16,7 @@ export interface DocumentDetailResponse {
   updatedAt: string;
   wordCount: number;
   text: string;
+  analysis: DocumentAnalysisResponse | null;
 }
 
 export interface DocumentDetailApiResponse {

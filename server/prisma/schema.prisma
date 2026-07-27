@@ -17,12 +17,25 @@ model Document {
   updatedAt DateTime @updatedAt
 
   content DocumentContent?
+  analysis DocumentAnalysis?
 }
 
 model DocumentContent {
   id String @id @default(uuid())
   text String
   wordCount Int
+  createdAt DateTime @default(now())
+
+  documentId String @unique
+  document Document @relation(fields: [documentId], references: [id])
+}
+
+model DocumentAnalysis {
+  id String @id @default(uuid())
+  summary String
+  topics String[]
+  entities Json
+  extractedData Json
   createdAt DateTime @default(now())
 
   documentId String @unique
