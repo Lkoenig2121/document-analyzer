@@ -86,7 +86,9 @@ export default function DocumentFilters({
               Clear topic filters
             </button>
           ) : (
-            <p className="text-xs text-zinc-500">Select one or more topics to filter documents.</p>
+            <p className="text-xs text-zinc-500">
+              Select topics to narrow results (documents must match all selected topics).
+            </p>
           )}
         </div>
       ) : null}

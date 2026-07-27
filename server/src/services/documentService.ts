@@ -15,7 +15,7 @@ export interface DocumentListFilters {
   userId: string;
   q?: string;
   type?: DocumentTypeFilter;
-  /** One or more topics; documents matching any selected topic are returned. */
+  /** One or more topics; documents must include every selected topic. */
   topics?: string[];
   page?: number;
   limit?: number;
@@ -205,19 +205,31 @@ function buildTypeWhere(type?: DocumentTypeFilter): Prisma.DocumentWhereInput | 
 }
 
 function buildTopicWhere(topics?: string[]): Prisma.DocumentWhereInput | null {
-  const normalized = (topics ?? []).map((topic) => topic.trim()).filter(Boolean);
+  const normalized = [...new Set((topics ?? []).map((topic) => topic.trim()).filter(Boolean))];
 
   if (normalized.length === 0) {
     return null;
   }
 
-  // Exact topic match (as stored). Multi-select = OR (hasSome).
-  return {
-    analysis: {
-      is: {
-        topics: { hasSome: normalized },
+  // Multi-select narrows results: document must include every selected topic.
+  if (normalized.length === 1) {
+    return {
+      analysis: {
+        is: {
+          topics: { has: normalized[0] },
+        },
       },
-    },
+    };
+  }
+
+  return {
+    AND: normalized.map((topic) => ({
+      analysis: {
+        is: {
+          topics: { has: topic },
+        },
+      },
+    })),
   };
 }
 
