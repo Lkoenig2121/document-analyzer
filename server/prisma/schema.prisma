@@ -7,31 +7,24 @@ datasource db {
   provider = "postgresql"
 }
 
-/// A file uploaded to the document management system.
 model Document {
-  /// Stable primary key. UUID avoids sequential ID enumeration and works well across services.
-  id String @id @default(uuid()) @db.Uuid
+  id String @id @default(uuid())
+  originalName String
+  storedName String
+  mimeType String
+  fileSize Int
+  uploadedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  /// Human-readable filename as provided by the client (e.g. "Q3 Report.pdf").
-  originalName String @map("original_name") @db.VarChar(1024)
+  content DocumentContent?
+}
 
-  /// Unique filename on disk/object storage (e.g. "1730000000000-482910384.pdf").
-  /// Must be unique — it is the storage lookup key.
-  storedName String @unique @map("stored_name") @db.VarChar(512)
+model DocumentContent {
+  id String @id @default(uuid())
+  text String
+  wordCount Int
+  createdAt DateTime @default(now())
 
-  /// IANA media type used for validation, serving, and downstream AI processing.
-  mimeType String @map("mime_type") @db.VarChar(255)
-
-  /// File size in bytes. BigInt supports files larger than the 2 GB Int limit.
-  fileSize BigInt @map("file_size")
-
-  /// Immutable upload timestamp (set once at insert).
-  uploadedAt DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(3)
-
-  /// Last metadata or record update. Managed automatically by Prisma.
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
-
-  @@index([uploadedAt])
-  @@index([mimeType])
-  @@map("documents")
+  documentId String @unique
+  document Document @relation(fields: [documentId], references: [id])
 }

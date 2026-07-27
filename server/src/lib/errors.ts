@@ -53,3 +53,17 @@ export class ConflictError extends AppError {
     this.name = 'ConflictError';
   }
 }
+
+export class UnsupportedFileTypeError extends AppError {
+  constructor(message = 'Unsupported file type', details?: unknown) {
+    super(415, message, { details });
+    this.name = 'UnsupportedFileTypeError';
+  }
+}
+
+export class DocumentParseError extends AppError {
+  constructor(message = 'Failed to parse document', details?: unknown) {
+    super(422, message, { details });
+    this.name = 'DocumentParseError';
+  }
+}
