@@ -4,20 +4,30 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { pinoHttp } from 'pino-http';
 import { randomUUID } from 'node:crypto';
+import { toNodeHandler } from 'better-auth/node';
 import { env } from './config/env.js';
+import { auth } from './lib/auth.js';
 import { logger } from './lib/logger.js';
 import routes from './routes/index.js';
-import { errorHandler, notFoundHandler } from './middleware/error.middleware.js';
+import { errorHandler } from './middleware/errorHandler.js';
+import { notFoundHandler } from './middleware/error.middleware.js';
 
 const app = express();
 
-app.use(helmet());
+app.use(helmet({
+  // Auth cookies / Next proxy need cross-origin flexibility in development.
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 app.use(
   cors({
     origin: env.CORS_ORIGIN,
     credentials: true,
   }),
 );
+
+// Better Auth must run before body parsers (Express 5 named wildcard).
+app.all('/api/auth/{*path}', toNodeHandler(auth));
+
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(

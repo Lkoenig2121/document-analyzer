@@ -1,6 +1,6 @@
 import type { Document, Prisma } from '../generated/prisma/client.js';
 import { prisma } from '../lib/prisma.js';
-import { NotFoundError } from '../lib/errors.js';
+import { NotFoundError, ValidationError } from '../lib/errors.js';
 import type {
   DocumentAnalysisResponse,
   DocumentDetailResponse,
@@ -11,6 +11,8 @@ import type {
 export type DocumentTypeFilter = 'pdf' | 'docx' | 'image' | 'txt';
 
 export interface DocumentListFilters {
+  /** Authenticated owner — required for all list queries. */
+  userId: string;
   q?: string;
   type?: DocumentTypeFilter;
   /** One or more topics; documents matching any selected topic are returned. */
@@ -55,9 +57,10 @@ const listInclude = {
 
 /**
  * Lists documents with optional search + type/topic filters and pagination.
+ * Always scoped to the authenticated user.
  */
 export async function listDocuments(
-  filters: DocumentListFilters = {},
+  filters: DocumentListFilters,
 ): Promise<DocumentListPageResponse> {
   const page = normalizePage(filters.page);
   const limit = normalizeLimit(filters.limit);
@@ -86,10 +89,13 @@ export async function listDocuments(
 }
 
 /**
- * @deprecated Prefer listDocuments({ q }). Kept for /documents/search compatibility.
+ * @deprecated Prefer listDocuments({ userId, q }). Kept for /documents/search compatibility.
  */
-export async function searchDocuments(query: string): Promise<DocumentListPageResponse> {
-  return listDocuments({ q: query });
+export async function searchDocuments(
+  userId: string,
+  query: string,
+): Promise<DocumentListPageResponse> {
+  return listDocuments({ userId, q: query });
 }
 
 function normalizePage(page?: number): number {
@@ -109,14 +115,16 @@ function normalizeLimit(limit?: number): number {
 }
 
 /**
- * Distinct AI topics across all analyses, for filter chips.
+ * Distinct AI topics for the current user's documents, for filter chips.
  */
-export async function listDocumentTopics(): Promise<string[]> {
+export async function listDocumentTopics(userId: string): Promise<string[]> {
   const rows = await prisma.$queryRaw<Array<{ topic: string }>>`
     SELECT DISTINCT topic
-    FROM "DocumentAnalysis" a,
-    LATERAL unnest(a.topics) AS topic
-    WHERE topic <> ''
+    FROM "DocumentAnalysis" a
+    INNER JOIN "Document" d ON d.id = a."documentId"
+    CROSS JOIN LATERAL unnest(a.topics) AS topic
+    WHERE d."userId" = ${userId}
+      AND topic <> ''
     ORDER BY topic ASC
   `;
 
@@ -126,7 +134,7 @@ export async function listDocumentTopics(): Promise<string[]> {
 async function buildDocumentWhere(
   filters: DocumentListFilters,
 ): Promise<Prisma.DocumentWhereInput> {
-  const clauses: Prisma.DocumentWhereInput[] = [];
+  const clauses: Prisma.DocumentWhereInput[] = [{ userId: filters.userId }];
 
   const typeClause = buildTypeWhere(filters.type);
   if (typeClause) {
@@ -138,17 +146,13 @@ async function buildDocumentWhere(
     clauses.push(topicClause);
   }
 
-  const searchClause = await buildSearchWhere(filters.q);
+  const searchClause = await buildSearchWhere(filters.userId, filters.q);
   if (searchClause) {
     clauses.push(searchClause);
   }
 
-  if (clauses.length === 0) {
-    return {};
-  }
-
   if (clauses.length === 1) {
-    return clauses[0] ?? {};
+    return clauses[0] ?? { userId: filters.userId };
   }
 
   return { AND: clauses };
@@ -217,7 +221,10 @@ function buildTopicWhere(topics?: string[]): Prisma.DocumentWhereInput | null {
   };
 }
 
-async function buildSearchWhere(query?: string): Promise<Prisma.DocumentWhereInput | null> {
+async function buildSearchWhere(
+  userId: string,
+  query?: string,
+): Promise<Prisma.DocumentWhereInput | null> {
   const q = query?.trim() ?? '';
 
   if (!q) {
@@ -226,9 +233,11 @@ async function buildSearchWhere(query?: string): Promise<Prisma.DocumentWhereInp
 
   const topicMatches = await prisma.$queryRaw<Array<{ documentId: string }>>`
     SELECT a."documentId"
-    FROM "DocumentAnalysis" a,
-    LATERAL unnest(a.topics) AS topic
-    WHERE topic ILIKE ${`%${q}%`}
+    FROM "DocumentAnalysis" a
+    INNER JOIN "Document" d ON d.id = a."documentId"
+    CROSS JOIN LATERAL unnest(a.topics) AS topic
+    WHERE d."userId" = ${userId}
+      AND topic ILIKE ${`%${q}%`}
   `;
 
   const topicMatchedIds = topicMatches.map((row) => row.documentId);
@@ -251,9 +260,12 @@ async function buildSearchWhere(query?: string): Promise<Prisma.DocumentWhereInp
 /**
  * Loads a single document with full content and analysis for the detail page.
  */
-export async function getDocumentById(id: string): Promise<DocumentDetailResponse> {
-  const document = await prisma.document.findUnique({
-    where: { id },
+export async function getDocumentById(
+  userId: string,
+  id: string,
+): Promise<DocumentDetailResponse> {
+  const document = await prisma.document.findFirst({
+    where: { id, userId },
     include: { content: true, analysis: true },
   });
 
@@ -265,15 +277,61 @@ export async function getDocumentById(id: string): Promise<DocumentDetailRespons
 }
 
 /**
+ * Runs Gemini analysis on stored document text and upserts DocumentAnalysis.
+ */
+export async function analyzeDocumentForUser(
+  userId: string,
+  id: string,
+): Promise<DocumentDetailResponse> {
+  const document = await prisma.document.findFirst({
+    where: { id, userId },
+    include: { content: true },
+  });
+
+  if (!document) {
+    throw new NotFoundError('Document not found');
+  }
+
+  if (!document.content?.text?.trim()) {
+    throw new ValidationError('Document has no extracted text to analyze');
+  }
+
+  const { analyzeDocumentText } = await import('./aiAnalysisService.js');
+  const analysis = await analyzeDocumentText(document.content.text);
+
+  await prisma.documentAnalysis.upsert({
+    where: { documentId: id },
+    create: {
+      documentId: id,
+      summary: analysis.summary,
+      topics: analysis.topics,
+      entities: analysis.entities as Prisma.InputJsonValue,
+      extractedData: analysis.extractedData as Prisma.InputJsonValue,
+    },
+    update: {
+      summary: analysis.summary,
+      topics: analysis.topics,
+      entities: analysis.entities as Prisma.InputJsonValue,
+      extractedData: analysis.extractedData as Prisma.InputJsonValue,
+    },
+  });
+
+  return getDocumentById(userId, id);
+}
+
+/**
  * Loads file metadata needed to stream a stored upload.
  */
-export async function getDocumentFileMeta(id: string): Promise<{
+export async function getDocumentFileMeta(
+  userId: string,
+  id: string,
+): Promise<{
   originalName: string;
   storedName: string;
   mimeType: string;
 }> {
-  const document = await prisma.document.findUnique({
-    where: { id },
+  const document = await prisma.document.findFirst({
+    where: { id, userId },
     select: {
       originalName: true,
       storedName: true,

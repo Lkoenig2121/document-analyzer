@@ -1,5 +1,16 @@
-/** Default Gemini model used when GEMINI_MODEL is not set. */
-export const DEFAULT_GEMINI_MODEL = 'gemini-2.0-flash';
+/**
+ * Default Gemini model when GEMINI_MODEL is not set.
+ * Prefer `gemini-flash-latest` over pinned `gemini-2.0-flash` — free-tier quotas
+ * on specific model IDs are often exhausted while the rolling alias still works.
+ */
+export const DEFAULT_GEMINI_MODEL = 'gemini-flash-latest';
+
+/** Tried in order when the primary model returns rate-limit / not-found errors. */
+export const GEMINI_MODEL_FALLBACKS = [
+  'gemini-flash-latest',
+  'gemini-2.0-flash-lite',
+  'gemini-2.0-flash',
+] as const;
 
 /**
  * Default embedding model when GEMINI_EMBEDDING_MODEL is not set.

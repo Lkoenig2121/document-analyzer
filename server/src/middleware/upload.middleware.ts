@@ -60,7 +60,7 @@ export function handleUploadError(
   if (err instanceof multer.MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
       next(
-        new ValidationError(`File exceeds maximum size of ${env.MAX_UPLOAD_SIZE_MB}MB`, {
+        new ValidationError(`Maximum file size is ${env.MAX_UPLOAD_SIZE_MB}MB`, {
           code: err.code,
         }),
       );

@@ -59,10 +59,18 @@ export async function parseDocument(
 
   const documentType = detectDocumentType(filePath, options.mimeType);
   const text = await extractTextByType(filePath, documentType);
+  const wordCount = countWords(stripPageMarkers(text));
+
+  if (wordCount === 0) {
+    throw new DocumentParseError(
+      'No readable text could be extracted from this file. Try a text-based PDF, DOCX, or a clearer scan.',
+      { filePath, documentType },
+    );
+  }
 
   return {
     text,
-    wordCount: countWords(text),
+    wordCount,
     documentType,
   };
 }
@@ -112,6 +120,7 @@ async function extractTextByType(filePath: string, documentType: DocumentType): 
 
 /**
  * Extracts embedded text from a PDF using pdf-parse.
+ * Image-only / scanned PDFs fall back to page screenshots + Tesseract OCR.
  * Preserves page boundaries with `<!--page:N-->` markers for RAG citations.
  */
 async function parsePdf(filePath: string): Promise<string> {
@@ -119,13 +128,14 @@ async function parsePdf(filePath: string): Promise<string> {
   const parser = new PDFParse({ data: buffer });
 
   try {
-    const result = await parser.getText();
+    const result = await parser.getText({ pageJoiner: '' });
+    let text = '';
 
     if (Array.isArray(result.pages) && result.pages.length > 0) {
-      return result.pages
+      text = result.pages
         .map((page) => {
           const pageNumber = page.num || 0;
-          const pageText = normalizeText(page.text);
+          const pageText = normalizeText(stripPdfParseNoise(page.text));
           if (!pageText || pageNumber < 1) {
             return '';
           }
@@ -133,10 +143,21 @@ async function parsePdf(filePath: string): Promise<string> {
         })
         .filter(Boolean)
         .join('\n\f\n');
+    } else {
+      text = normalizeText(stripPdfParseNoise(result.text));
     }
 
-    return normalizeText(result.text);
+    if (isMeaningfulText(text)) {
+      return text;
+    }
+
+    logger.info({ filePath }, 'PDF has no embedded text; falling back to OCR');
+    return await ocrPdfPages(parser, filePath);
   } catch (error) {
+    if (error instanceof DocumentParseError) {
+      throw error;
+    }
+
     logger.error({ err: error, filePath }, 'PDF parsing failed');
     throw new DocumentParseError('Failed to extract text from PDF', {
       filePath,
@@ -147,6 +168,69 @@ async function parsePdf(filePath: string): Promise<string> {
       await parser.destroy();
     } catch {
       // pdf-parse may throw on destroy for some files; text extraction already succeeded.
+    }
+  }
+}
+
+/**
+ * Renders each PDF page and runs Tesseract OCR.
+ * Used when the PDF has no selectable text layer (common for designed resumes).
+ */
+async function ocrPdfPages(parser: PDFParse, filePath: string): Promise<string> {
+  const screenshots = await parser.getScreenshot({
+    imageBuffer: true,
+    imageDataUrl: false,
+    scale: 2,
+  });
+
+  const pages = screenshots.pages ?? [];
+  if (pages.length === 0) {
+    throw new DocumentParseError('PDF has no pages to OCR', { filePath });
+  }
+
+  let worker: Awaited<ReturnType<typeof createWorker>> | undefined;
+
+  try {
+    worker = await createWorker('eng');
+    const parts: string[] = [];
+
+    for (const page of pages) {
+      if (!page.data || page.data.length === 0) {
+        continue;
+      }
+
+      const image = Buffer.from(page.data);
+      const result = await worker.recognize(image);
+      const pageText = normalizeText(result.data.text);
+
+      if (!pageText || page.pageNumber < 1) {
+        continue;
+      }
+
+      parts.push(`<!--page:${page.pageNumber}-->\n${pageText}`);
+    }
+
+    const text = parts.join('\n\f\n');
+    if (!isMeaningfulText(text)) {
+      throw new DocumentParseError('OCR could not extract readable text from this PDF', {
+        filePath,
+      });
+    }
+
+    return text;
+  } catch (error) {
+    if (error instanceof DocumentParseError) {
+      throw error;
+    }
+
+    logger.error({ err: error, filePath }, 'PDF OCR failed');
+    throw new DocumentParseError('Failed to OCR PDF pages', {
+      filePath,
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  } finally {
+    if (worker) {
+      await worker.terminate().catch(() => undefined);
     }
   }
 }
@@ -217,6 +301,21 @@ function normalizeText(text: string): string {
     .replace(/\r\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+/** Removes pdf-parse page footers like `-- 1 of 1 --` that are not document content. */
+function stripPdfParseNoise(text: string): string {
+  return text.replace(/--\s*\d+\s+of\s+\d+\s*--/gi, '');
+}
+
+/** Strips RAG page markers before word-count / emptiness checks. */
+function stripPageMarkers(text: string): string {
+  return text.replace(/<!--page:\d+-->/g, '').replace(/\f/g, '');
+}
+
+/** True when extracted text has enough real words to be useful for analysis/RAG. */
+function isMeaningfulText(text: string): boolean {
+  return countWords(stripPageMarkers(stripPdfParseNoise(text))) >= 5;
 }
 
 /** Counts words by splitting on whitespace; returns 0 for empty strings. */

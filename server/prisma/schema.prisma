@@ -7,54 +7,121 @@ datasource db {
   provider = "postgresql"
 }
 
-model Document {
-  id String @id @default(uuid())
-  originalName String
-  storedName String
-  mimeType String
-  fileSize Int
-  uploadedAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+model User {
+  id            String    @id
+  name          String
+  email         String
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+  documents     Document[]
 
-  content DocumentContent?
+  @@unique([email])
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([token])
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+model Document {
+  id           String   @id @default(uuid())
+  originalName String
+  storedName   String
+  mimeType     String
+  fileSize     Int
+  uploadedAt   DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  content  DocumentContent?
   analysis DocumentAnalysis?
-  chunks DocumentChunk[]
+  chunks   DocumentChunk[]
+
+  @@index([userId])
 }
 
 model DocumentContent {
-  id String @id @default(uuid())
-  text String
+  id        String   @id @default(uuid())
+  text      String
   wordCount Int
   createdAt DateTime @default(now())
 
-  documentId String @unique
-  document Document @relation(fields: [documentId], references: [id])
+  documentId String   @unique
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
 }
 
 model DocumentAnalysis {
-  id String @id @default(uuid())
-  summary String
-  topics String[]
-  entities Json
+  id            String   @id @default(uuid())
+  summary       String
+  topics        String[]
+  entities      Json
   extractedData Json
-  createdAt DateTime @default(now())
+  createdAt     DateTime @default(now())
 
-  documentId String @unique
-  document Document @relation(fields: [documentId], references: [id])
+  documentId String   @unique
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
 }
 
 model DocumentChunk {
-  id String @id @default(uuid())
-  text String
+  id         String                       @id @default(uuid())
+  text       String
   chunkIndex Int
-  /// 1-based PDF page when known (from page-aware parsing).
   pageNumber Int?
-  /// pgvector column — read/write via raw SQL (Prisma Unsupported).
-  embedding Unsupported("vector(768)")?
-  createdAt DateTime @default(now())
+  embedding  Unsupported("vector(768)")?
+  createdAt  DateTime                     @default(now())
 
   documentId String
-  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
   @@unique([documentId, chunkIndex])
   @@index([documentId])

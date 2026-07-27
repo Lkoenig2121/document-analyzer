@@ -70,7 +70,7 @@ export function mapGeminiError(error: unknown, context?: string): AiServiceError
   }
 
   if (error instanceof GoogleGenerativeAIAbortError) {
-    return new AiServiceError(`${prefix}AI request timed out`, {
+    return new AiServiceError('AI processing temporarily unavailable', {
       code: 'AI_TIMEOUT',
       cause: error.message,
     });
@@ -88,7 +88,7 @@ export function mapGeminiError(error: unknown, context?: string): AiServiceError
     );
 
     if (error.status === 429) {
-      return new AiServiceError(`${prefix}AI rate limit exceeded. Try again later.`, {
+      return new AiServiceError('AI processing temporarily unavailable', {
         code: 'AI_RATE_LIMIT',
         status: error.status,
       });
@@ -101,7 +101,7 @@ export function mapGeminiError(error: unknown, context?: string): AiServiceError
       });
     }
 
-    return new AiServiceError(`${prefix}AI service unavailable`, {
+    return new AiServiceError('AI processing temporarily unavailable', {
       code: 'AI_UPSTREAM_ERROR',
       status: error.status,
       statusText: error.statusText,
@@ -121,7 +121,7 @@ export function mapGeminiError(error: unknown, context?: string): AiServiceError
 
   logger.error({ err: error }, 'Unexpected Gemini error');
 
-  return new AiServiceError(`${prefix}AI service request failed`, {
+  return new AiServiceError('AI processing temporarily unavailable', {
     code: 'AI_UNKNOWN_ERROR',
     cause: error instanceof Error ? error.message : String(error),
   });

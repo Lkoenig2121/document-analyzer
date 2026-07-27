@@ -46,6 +46,7 @@ export interface ChatWithDocumentOptions {
  * question → embed → vector search (scoped) → Gemini answer grounded in chunks.
  */
 export async function chatWithDocument(
+  userId: string,
   documentId: string,
   question: string,
   options: ChatWithDocumentOptions = {},
@@ -56,8 +57,8 @@ export async function chatWithDocument(
     throw new ValidationError('question is required');
   }
 
-  const document = await prisma.document.findUnique({
-    where: { id: documentId },
+  const document = await prisma.document.findFirst({
+    where: { id: documentId, userId },
     select: {
       id: true,
       originalName: true,

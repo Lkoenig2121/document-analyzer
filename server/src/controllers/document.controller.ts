@@ -8,6 +8,7 @@ import { uploadDir } from '../middleware/upload.middleware.js';
 import { analyzeDocumentText } from '../services/aiAnalysisService.js';
 import { chatWithDocument } from '../services/documentChatService.js';
 import {
+  analyzeDocumentForUser,
   getDocumentById,
   getDocumentFileMeta,
   listDocumentTopics,
@@ -21,6 +22,7 @@ import {
 import { parseDocument } from '../services/documentParserService.js';
 import type { DocumentRecordResponse } from '../types/document.js';
 import { NotFoundError } from '../lib/errors.js';
+import { logger } from '../lib/logger.js';
 
 const DOCUMENT_TYPE_FILTERS = new Set<DocumentTypeFilter>(['pdf', 'docx', 'image', 'txt']);
 
@@ -94,8 +96,8 @@ function parsePositiveInt(value: unknown, fallback: number, max?: number): numbe
   return max ? Math.min(normalized, max) : normalized;
 }
 
-function parseListFilters(query: Request['query']): DocumentListFilters {
-  const filters: DocumentListFilters = {};
+function parseListFilters(query: Request['query'], userId: string): DocumentListFilters {
+  const filters: DocumentListFilters = { userId };
   const q = parseQueryString(query.q);
   const type = parseDocumentType(query.type);
   const topics = parseTopics(query.topic);
@@ -118,24 +120,49 @@ function parseListFilters(query: Request['query']): DocumentListFilters {
   return filters;
 }
 
+function requireUserId(req: Request): string {
+  const userId = req.user?.id;
+
+  if (!userId) {
+    throw new ValidationError('Authenticated user is required');
+  }
+
+  return userId;
+}
+
 export async function listDocuments(req: Request, res: Response): Promise<void> {
-  const documents = await listDocumentsFromService(parseListFilters(req.query));
+  const userId = requireUserId(req);
+  const documents = await listDocumentsFromService(parseListFilters(req.query, userId));
   res.status(200).json(documents);
 }
 
 export async function searchDocuments(req: Request, res: Response): Promise<void> {
-  const documents = await listDocumentsFromService(parseListFilters(req.query));
+  const userId = requireUserId(req);
+  const documents = await listDocumentsFromService(parseListFilters(req.query, userId));
   res.status(200).json(documents);
 }
 
-export async function listTopics(_req: Request, res: Response): Promise<void> {
-  const topics = await listDocumentTopics();
+export async function listTopics(req: Request, res: Response): Promise<void> {
+  const userId = requireUserId(req);
+  const topics = await listDocumentTopics(userId);
   res.status(200).json(topics);
 }
 
-export async function getDocument(req: Request, res: Response): Promise<void> {
+export async function analyzeDocument(req: Request, res: Response): Promise<void> {
+  const userId = requireUserId(req);
   const id = getRouteParam(req.params.id, 'document id');
-  const document = await getDocumentById(id);
+  const document = await analyzeDocumentForUser(userId, id);
+
+  res.status(200).json({
+    success: true,
+    data: document,
+  });
+}
+
+export async function getDocument(req: Request, res: Response): Promise<void> {
+  const userId = requireUserId(req);
+  const id = getRouteParam(req.params.id, 'document id');
+  const document = await getDocumentById(userId, id);
 
   res.status(200).json({
     success: true,
@@ -144,8 +171,9 @@ export async function getDocument(req: Request, res: Response): Promise<void> {
 }
 
 export async function serveDocumentFile(req: Request, res: Response): Promise<void> {
+  const userId = requireUserId(req);
   const id = getRouteParam(req.params.id, 'document id');
-  const document = await getDocumentFileMeta(id);
+  const document = await getDocumentFileMeta(userId, id);
   const filePath = path.join(uploadDir, document.storedName);
 
   try {
@@ -160,6 +188,7 @@ export async function serveDocumentFile(req: Request, res: Response): Promise<vo
 }
 
 export async function chatDocument(req: Request, res: Response): Promise<void> {
+  const userId = requireUserId(req);
   const id = getRouteParam(req.params.id, 'document id');
   const question =
     typeof req.body?.question === 'string' ? req.body.question.trim() : '';
@@ -168,7 +197,7 @@ export async function chatDocument(req: Request, res: Response): Promise<void> {
     throw new ValidationError('question is required');
   }
 
-  const result = await chatWithDocument(id, question);
+  const result = await chatWithDocument(userId, id, question);
 
   res.status(200).json({
     success: true,
@@ -177,6 +206,7 @@ export async function chatDocument(req: Request, res: Response): Promise<void> {
 }
 
 export async function createDocument(req: Request, res: Response): Promise<void> {
+  const userId = requireUserId(req);
   const file = req.file;
 
   if (!file) {
@@ -185,9 +215,40 @@ export async function createDocument(req: Request, res: Response): Promise<void>
 
   const storedPath = path.join(uploadDir, file.filename);
 
+  logger.info(
+    {
+      userId,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      fileSize: file.size,
+      storedName: file.filename,
+    },
+    'Upload started',
+  );
+
   try {
     const parsed = await parseDocument(storedPath, { mimeType: file.mimetype });
-    const analysis = await analyzeDocumentText(parsed.text);
+    let analysis: Awaited<ReturnType<typeof analyzeDocumentText>> | null = null;
+
+    try {
+      logger.info(
+        { userId, originalName: file.originalname, wordCount: parsed.wordCount },
+        'AI processing started',
+      );
+      analysis = await analyzeDocumentText(parsed.text);
+      logger.info(
+        {
+          userId,
+          originalName: file.originalname,
+          topicCount: analysis.topics.length,
+          entityCount: analysis.entities.length,
+        },
+        'AI processing finished',
+      );
+    } catch (error) {
+      // Allow upload + indexing even when Gemini analysis is rate-limited.
+      logger.warn({ err: error, userId, originalName: file.originalname }, 'AI processing failed');
+    }
 
     const document = await prisma.$transaction(async (tx) => {
       const created = await tx.document.create({
@@ -196,6 +257,7 @@ export async function createDocument(req: Request, res: Response): Promise<void>
           storedName: file.filename,
           mimeType: file.mimetype,
           fileSize: file.size,
+          userId,
         },
       });
 
@@ -207,24 +269,32 @@ export async function createDocument(req: Request, res: Response): Promise<void>
         },
       });
 
-      await tx.documentAnalysis.create({
-        data: {
-          documentId: created.id,
-          summary: analysis.summary,
-          topics: analysis.topics,
-          entities: analysis.entities as Prisma.InputJsonValue,
-          extractedData: analysis.extractedData as Prisma.InputJsonValue,
-        },
-      });
+      if (analysis) {
+        await tx.documentAnalysis.create({
+          data: {
+            documentId: created.id,
+            summary: analysis.summary,
+            topics: analysis.topics,
+            entities: analysis.entities as Prisma.InputJsonValue,
+            extractedData: analysis.extractedData as Prisma.InputJsonValue,
+          },
+        });
+      }
 
       return created;
     });
+
+    logger.info({ userId, documentId: document.id }, 'Upload finished');
 
     res.status(201).json({
       success: true,
       data: serializeDocument(document),
     });
   } catch (error) {
+    logger.error(
+      { err: error, userId, originalName: file.originalname },
+      'Upload failed',
+    );
     await fs.unlink(storedPath).catch(() => undefined);
     throw error;
   }

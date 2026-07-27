@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import { env } from '../config/env.js';
+import {
+  DEFAULT_GEMINI_MODEL,
+  GEMINI_MODEL_FALLBACKS,
+} from '../config/gemini.js';
 import { AiServiceError, ValidationError } from '../lib/errors.js';
 import { getGeminiModel, withGeminiErrorHandling } from '../lib/gemini.js';
 import { logger } from '../lib/logger.js';
@@ -24,6 +29,7 @@ const documentAnalysisSchema = z.object({
 /**
  * Analyzes document text with Gemini and returns a validated structured result.
  * Controllers should call this — they must not talk to Gemini directly.
+ * Retries with fallback models when the primary hits rate limits or is unavailable.
  */
 export async function analyzeDocumentText(documentText: string): Promise<DocumentAnalysisResult> {
   const text = documentText.trim();
@@ -32,22 +38,76 @@ export async function analyzeDocumentText(documentText: string): Promise<Documen
     throw new ValidationError('Document text is required for AI analysis');
   }
 
-  const model = getGeminiModel({
-    systemInstruction: DOCUMENT_ANALYSIS_SYSTEM_INSTRUCTION,
-    generationConfig: {
-      responseMimeType: 'application/json',
-      temperature: 0.2,
-    },
-  });
-
   const prompt = buildDocumentAnalysisPrompt(text);
+  const modelsToTry = uniqueModels([
+    env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL,
+    ...GEMINI_MODEL_FALLBACKS,
+  ]);
 
-  const response = await withGeminiErrorHandling(async () => {
-    const result = await model.generateContent(prompt);
-    return result.response.text();
-  }, 'Document analysis');
+  let lastError: unknown;
 
-  return parseAnalysisResponse(response);
+  for (const modelName of modelsToTry) {
+    try {
+      const model = getGeminiModel({
+        model: modelName,
+        systemInstruction: DOCUMENT_ANALYSIS_SYSTEM_INSTRUCTION,
+        generationConfig: {
+          responseMimeType: 'application/json',
+          temperature: 0.2,
+        },
+      });
+
+      const response = await withGeminiErrorHandling(async () => {
+        const result = await model.generateContent(prompt);
+        return result.response.text();
+      }, 'Document analysis');
+
+      if (modelName !== modelsToTry[0]) {
+        logger.info({ modelName }, 'Document analysis succeeded with fallback model');
+      }
+
+      return parseAnalysisResponse(response);
+    } catch (error) {
+      lastError = error;
+
+      if (isRetryableGeminiModelError(error)) {
+        logger.warn(
+          { modelName, err: error },
+          'Document analysis model failed; trying fallback',
+        );
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new AiServiceError('Document analysis failed for all Gemini models', {
+        code: 'AI_ALL_MODELS_FAILED',
+      });
+}
+
+function uniqueModels(models: string[]): string[] {
+  return [...new Set(models.filter(Boolean))];
+}
+
+function isRetryableGeminiModelError(error: unknown): boolean {
+  if (!(error instanceof AiServiceError)) {
+    return false;
+  }
+
+  const details = error.details as { code?: string; status?: number } | undefined;
+  const code = details?.code;
+  const status = details?.status;
+
+  return (
+    code === 'AI_RATE_LIMIT' ||
+    code === 'AI_UPSTREAM_ERROR' ||
+    status === 429 ||
+    status === 404
+  );
 }
 
 function parseAnalysisResponse(raw: string): DocumentAnalysisResult {
