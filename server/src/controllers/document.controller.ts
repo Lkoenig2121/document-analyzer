@@ -100,7 +100,8 @@ function parseListFilters(query: Request['query'], userId: string): DocumentList
   const filters: DocumentListFilters = { userId };
   const q = parseQueryString(query.q);
   const type = parseDocumentType(query.type);
-  const topics = parseTopics(query.topic);
+  // Accept `topic`, repeated `topic`, or axios-style `topic[]`.
+  const topics = parseTopics(query.topic ?? query['topic[]']);
 
   if (q) {
     filters.q = q;
