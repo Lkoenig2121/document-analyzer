@@ -112,7 +112,7 @@ async function extractTextByType(filePath: string, documentType: DocumentType): 
 
 /**
  * Extracts embedded text from a PDF using pdf-parse.
- * Uses a buffer load so parsing works with files stored on local disk.
+ * Preserves page boundaries with `<!--page:N-->` markers for RAG citations.
  */
 async function parsePdf(filePath: string): Promise<string> {
   const buffer = await fs.readFile(filePath);
@@ -120,6 +120,21 @@ async function parsePdf(filePath: string): Promise<string> {
 
   try {
     const result = await parser.getText();
+
+    if (Array.isArray(result.pages) && result.pages.length > 0) {
+      return result.pages
+        .map((page) => {
+          const pageNumber = page.num || 0;
+          const pageText = normalizeText(page.text);
+          if (!pageText || pageNumber < 1) {
+            return '';
+          }
+          return `<!--page:${pageNumber}-->\n${pageText}`;
+        })
+        .filter(Boolean)
+        .join('\n\f\n');
+    }
+
     return normalizeText(result.text);
   } catch (error) {
     logger.error({ err: error, filePath }, 'PDF parsing failed');
@@ -128,7 +143,11 @@ async function parsePdf(filePath: string): Promise<string> {
       cause: error instanceof Error ? error.message : String(error),
     });
   } finally {
-    await parser.destroy().catch(() => undefined);
+    try {
+      await parser.destroy();
+    } catch {
+      // pdf-parse may throw on destroy for some files; text extraction already succeeded.
+    }
   }
 }
 

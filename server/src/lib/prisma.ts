@@ -8,8 +8,21 @@ const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
 };
 
+function createPool(): Pool {
+  const databaseUrl = new URL(env.DATABASE_URL);
+
+  return new Pool({
+    host: databaseUrl.hostname,
+    port: databaseUrl.port ? Number(databaseUrl.port) : 5432,
+    user: decodeURIComponent(databaseUrl.username),
+    // pg SCRAM auth requires password to be a string (never undefined).
+    password: decodeURIComponent(databaseUrl.password || ''),
+    database: databaseUrl.pathname.replace(/^\//, '').split('?')[0] || undefined,
+  });
+}
+
 function createPrismaClient(): PrismaClient {
-  const pool = new Pool({ connectionString: env.DATABASE_URL });
+  const pool = createPool();
   const adapter = new PrismaPg(pool);
 
   return new PrismaClient({

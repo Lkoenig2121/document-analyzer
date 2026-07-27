@@ -18,6 +18,7 @@ model Document {
 
   content DocumentContent?
   analysis DocumentAnalysis?
+  chunks DocumentChunk[]
 }
 
 model DocumentContent {
@@ -40,4 +41,21 @@ model DocumentAnalysis {
 
   documentId String @unique
   document Document @relation(fields: [documentId], references: [id])
+}
+
+model DocumentChunk {
+  id String @id @default(uuid())
+  text String
+  chunkIndex Int
+  /// 1-based PDF page when known (from page-aware parsing).
+  pageNumber Int?
+  /// pgvector column — read/write via raw SQL (Prisma Unsupported).
+  embedding Unsupported("vector(768)")?
+  createdAt DateTime @default(now())
+
+  documentId String
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, chunkIndex])
+  @@index([documentId])
 }

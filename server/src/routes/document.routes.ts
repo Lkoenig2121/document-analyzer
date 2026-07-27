@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import {
+  chatDocument,
   createDocument,
   getDocument,
   listDocuments,
@@ -22,6 +23,7 @@ router.get('/', asyncHandler(listDocuments));
 router.get('/search', asyncHandler(searchDocuments));
 router.get('/topics', asyncHandler(listTopics));
 router.get('/:id/file', asyncHandler(serveDocumentFile));
+router.post('/:id/chat', asyncHandler(chatDocument));
 router.get('/:id', asyncHandler(getDocument));
 router.post('/', ...uploadHandlers);
 router.post('/upload', ...uploadHandlers);

@@ -6,6 +6,7 @@ import { prisma } from '../lib/prisma.js';
 import { ValidationError } from '../lib/errors.js';
 import { uploadDir } from '../middleware/upload.middleware.js';
 import { analyzeDocumentText } from '../services/aiAnalysisService.js';
+import { chatWithDocument } from '../services/documentChatService.js';
 import {
   getDocumentById,
   getDocumentFileMeta,
@@ -156,6 +157,23 @@ export async function serveDocumentFile(req: Request, res: Response): Promise<vo
   res.setHeader('Content-Type', document.mimeType);
   res.setHeader('Content-Disposition', `inline; filename="${document.originalName}"`);
   res.sendFile(filePath);
+}
+
+export async function chatDocument(req: Request, res: Response): Promise<void> {
+  const id = getRouteParam(req.params.id, 'document id');
+  const question =
+    typeof req.body?.question === 'string' ? req.body.question.trim() : '';
+
+  if (!question) {
+    throw new ValidationError('question is required');
+  }
+
+  const result = await chatWithDocument(id, question);
+
+  res.status(200).json({
+    success: true,
+    data: result,
+  });
 }
 
 export async function createDocument(req: Request, res: Response): Promise<void> {
