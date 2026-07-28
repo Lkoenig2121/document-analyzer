@@ -7,6 +7,10 @@ import type {
   DocumentListPageResponse,
   DocumentSummaryResponse,
 } from '../types/document.js';
+import {
+  expandTopicFilterValues,
+  normalizeTopics,
+} from '../lib/topicNormalization.js';
 
 export type DocumentTypeFilter = 'pdf' | 'docx' | 'image' | 'txt';
 
@@ -128,7 +132,9 @@ export async function listDocumentTopics(userId: string): Promise<string[]> {
     ORDER BY topic ASC
   `;
 
-  return rows.map((row) => row.topic);
+  return normalizeTopics(rows.map((row) => row.topic)).sort((a, b) =>
+    a.localeCompare(b),
+  );
 }
 
 async function buildDocumentWhere(
@@ -212,25 +218,23 @@ function buildTopicWhere(topics?: string[]): Prisma.DocumentWhereInput | null {
   }
 
   // Multi-select narrows results: document must include every selected topic.
-  if (normalized.length === 1) {
+  // Expand each selection to aliases so legacy spellings still match.
+  const clauses = normalized.map((topic) => {
+    const variants = expandTopicFilterValues(topic);
     return {
       analysis: {
         is: {
-          topics: { has: normalized[0] },
+          topics: { hasSome: variants.length > 0 ? variants : [topic] },
         },
       },
-    };
+    } satisfies Prisma.DocumentWhereInput;
+  });
+
+  if (clauses.length === 1) {
+    return clauses[0] ?? null;
   }
 
-  return {
-    AND: normalized.map((topic) => ({
-      analysis: {
-        is: {
-          topics: { has: topic },
-        },
-      },
-    })),
-  };
+  return { AND: clauses };
 }
 
 async function buildSearchWhere(
@@ -367,7 +371,7 @@ function serializeDocumentSummary(document: DocumentListRow): DocumentSummaryRes
     analysis: document.analysis
       ? {
           summary: document.analysis.summary,
-          topics: document.analysis.topics,
+          topics: normalizeTopics(document.analysis.topics),
         }
       : null,
   };
@@ -400,7 +404,7 @@ function serializeDocumentAnalysis(
 ): DocumentAnalysisResponse {
   return {
     summary: analysis.summary,
-    topics: analysis.topics,
+    topics: normalizeTopics(analysis.topics),
     entities: normalizeStringArray(analysis.entities),
     extractedData: normalizeExtractedData(analysis.extractedData),
     createdAt: analysis.createdAt.toISOString(),

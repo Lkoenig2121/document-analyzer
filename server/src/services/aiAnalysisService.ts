@@ -11,6 +11,7 @@ import {
   buildDocumentAnalysisPrompt,
   DOCUMENT_ANALYSIS_SYSTEM_INSTRUCTION,
 } from '../prompts/documentAnalysis.prompt.js';
+import { normalizeTopics } from '../lib/topicNormalization.js';
 
 export interface DocumentAnalysisResult {
   summary: string;
@@ -147,7 +148,7 @@ function parseAnalysisResponse(raw: string): DocumentAnalysisResult {
 
   return {
     summary: validated.data.summary.trim(),
-    topics: validated.data.topics.map((topic) => topic.trim()).filter(Boolean),
+    topics: normalizeTopics(validated.data.topics),
     entities: validated.data.entities.map((entity) => entity.trim()).filter(Boolean),
     extractedData: validated.data.extractedData,
   };
