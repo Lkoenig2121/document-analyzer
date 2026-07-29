@@ -7,10 +7,12 @@ import type {
   DocumentListPageResponse,
   DocumentSummaryResponse,
 } from '../types/document.js';
+import { normalizeTopics } from '../lib/topicNormalization.js';
 import {
-  expandTopicFilterValues,
-  normalizeTopics,
-} from '../lib/topicNormalization.js';
+  expandTopicFilterForUser,
+  finalizeTopicsForUser,
+  listCanonicalUserTopics,
+} from './topicClusterService.js';
 
 export type DocumentTypeFilter = 'pdf' | 'docx' | 'image' | 'txt';
 
@@ -122,19 +124,7 @@ function normalizeLimit(limit?: number): number {
  * Distinct AI topics for the current user's documents, for filter chips.
  */
 export async function listDocumentTopics(userId: string): Promise<string[]> {
-  const rows = await prisma.$queryRaw<Array<{ topic: string }>>`
-    SELECT DISTINCT topic
-    FROM "DocumentAnalysis" a
-    INNER JOIN "Document" d ON d.id = a."documentId"
-    CROSS JOIN LATERAL unnest(a.topics) AS topic
-    WHERE d."userId" = ${userId}
-      AND topic <> ''
-    ORDER BY topic ASC
-  `;
-
-  return normalizeTopics(rows.map((row) => row.topic)).sort((a, b) =>
-    a.localeCompare(b),
-  );
+  return listCanonicalUserTopics(userId);
 }
 
 async function buildDocumentWhere(
@@ -147,7 +137,7 @@ async function buildDocumentWhere(
     clauses.push(typeClause);
   }
 
-  const topicClause = buildTopicWhere(filters.topics);
+  const topicClause = await buildTopicWhere(filters.userId, filters.topics);
   if (topicClause) {
     clauses.push(topicClause);
   }
@@ -210,7 +200,10 @@ function buildTypeWhere(type?: DocumentTypeFilter): Prisma.DocumentWhereInput | 
   }
 }
 
-function buildTopicWhere(topics?: string[]): Prisma.DocumentWhereInput | null {
+async function buildTopicWhere(
+  userId: string,
+  topics?: string[],
+): Promise<Prisma.DocumentWhereInput | null> {
   const normalized = [...new Set((topics ?? []).map((topic) => topic.trim()).filter(Boolean))];
 
   if (normalized.length === 0) {
@@ -218,17 +211,20 @@ function buildTopicWhere(topics?: string[]): Prisma.DocumentWhereInput | null {
   }
 
   // Multi-select narrows results: document must include every selected topic.
-  // Expand each selection to aliases so legacy spellings still match.
-  const clauses = normalized.map((topic) => {
-    const variants = expandTopicFilterValues(topic);
-    return {
-      analysis: {
-        is: {
-          topics: { hasSome: variants.length > 0 ? variants : [topic] },
+  // Expand each chip to its semantic cluster so legacy spellings still match.
+  const clauses = await Promise.all(
+    normalized.map(async (topic) => {
+      const variants = await expandTopicFilterForUser(userId, topic);
+
+      return {
+        analysis: {
+          is: {
+            topics: { hasSome: variants.length > 0 ? variants : [topic] },
+          },
         },
-      },
-    } satisfies Prisma.DocumentWhereInput;
-  });
+      } satisfies Prisma.DocumentWhereInput;
+    }),
+  );
 
   if (clauses.length === 1) {
     return clauses[0] ?? null;
@@ -314,19 +310,20 @@ export async function analyzeDocumentForUser(
 
   const { analyzeDocumentText } = await import('./aiAnalysisService.js');
   const analysis = await analyzeDocumentText(document.content.text);
+  const topics = await finalizeTopicsForUser(userId, analysis.topics);
 
   await prisma.documentAnalysis.upsert({
     where: { documentId: id },
     create: {
       documentId: id,
       summary: analysis.summary,
-      topics: analysis.topics,
+      topics,
       entities: analysis.entities as Prisma.InputJsonValue,
       extractedData: analysis.extractedData as Prisma.InputJsonValue,
     },
     update: {
       summary: analysis.summary,
-      topics: analysis.topics,
+      topics,
       entities: analysis.entities as Prisma.InputJsonValue,
       extractedData: analysis.extractedData as Prisma.InputJsonValue,
     },

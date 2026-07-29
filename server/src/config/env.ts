@@ -20,6 +20,12 @@ const envSchema = z.object({
   GEMINI_API_KEY: z.string().min(1, 'GEMINI_API_KEY is required'),
   GEMINI_MODEL: z.string().min(1).default('gemini-flash-latest'),
   GEMINI_EMBEDDING_MODEL: z.string().min(1).default('gemini-embedding-001'),
+  /** Cosine similarity threshold (0–1) for merging topic labels via embeddings. */
+  TOPIC_EMBEDDING_SIMILARITY_THRESHOLD: z.coerce
+    .number()
+    .min(0)
+    .max(1)
+    .default(0.84),
   /** Public app URL used by Better Auth (Next.js origin when proxied). */
   BETTER_AUTH_URL: z.string().url().default('http://localhost:3000'),
   BETTER_AUTH_SECRET: z.string().min(32, 'BETTER_AUTH_SECRET must be at least 32 characters'),

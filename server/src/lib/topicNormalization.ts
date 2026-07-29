@@ -1,3 +1,8 @@
+import {
+  DEFAULT_FUZZY_TOPIC_THRESHOLD,
+  topicSimilarityScore,
+} from './topicSimilarity.js';
+
 /**
  * Collapses near-duplicate AI topic labels into a single canonical form.
  * Applied on analysis save, topic listing, and DB backfill.
@@ -46,7 +51,7 @@ const TOPIC_ALIASES: Record<string, string> = {
   web: 'Web Development',
 };
 
-function topicKey(topic: string): string {
+export function topicKey(topic: string): string {
   return topic
     .trim()
     .toLowerCase()
@@ -86,12 +91,49 @@ export function normalizeTopic(topic: string): string {
 }
 
 /**
+ * Merges fuzzy near-duplicates within one topic list (same document batch).
+ */
+function mergeSimilarTopicsInBatch(
+  topics: string[],
+  threshold: number = DEFAULT_FUZZY_TOPIC_THRESHOLD,
+): string[] {
+  const result: string[] = [];
+
+  for (const topic of topics) {
+    const matchIndex = result.findIndex(
+      (existing) => topicSimilarityScore(existing, topic) >= threshold,
+    );
+
+    if (matchIndex === -1) {
+      result.push(topic);
+      continue;
+    }
+
+    const existing = result[matchIndex] ?? topic;
+    result[matchIndex] = pickShorterCanonical(existing, topic);
+  }
+
+  return result;
+}
+
+function pickShorterCanonical(left: string, right: string): string {
+  const leftCanonical = normalizeTopic(left);
+  const rightCanonical = normalizeTopic(right);
+
+  if (leftCanonical.length === rightCanonical.length) {
+    return leftCanonical;
+  }
+
+  return leftCanonical.length < rightCanonical.length ? leftCanonical : rightCanonical;
+}
+
+/**
  * Normalizes a list of topics, drops empties, and de-duplicates
- * (case/alias insensitive) while preserving first-seen order.
+ * (case/alias/fuzzy insensitive) while preserving first-seen order.
  */
 export function normalizeTopics(topics: string[]): string[] {
   const seen = new Set<string>();
-  const result: string[] = [];
+  const aliasNormalized: string[] = [];
 
   for (const topic of topics) {
     const canonical = normalizeTopic(topic);
@@ -105,10 +147,10 @@ export function normalizeTopics(topics: string[]): string[] {
     }
 
     seen.add(key);
-    result.push(canonical);
+    aliasNormalized.push(canonical);
   }
 
-  return result;
+  return mergeSimilarTopicsInBatch(aliasNormalized);
 }
 
 /**

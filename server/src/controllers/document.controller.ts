@@ -6,6 +6,7 @@ import { prisma } from '../lib/prisma.js';
 import { ValidationError } from '../lib/errors.js';
 import { uploadDir } from '../middleware/upload.middleware.js';
 import { analyzeDocumentText } from '../services/aiAnalysisService.js';
+import { finalizeTopicsForUser } from '../services/topicClusterService.js';
 import { chatWithDocument } from '../services/documentChatService.js';
 import {
   analyzeDocumentForUser,
@@ -237,6 +238,10 @@ export async function createDocument(req: Request, res: Response): Promise<void>
         'AI processing started',
       );
       analysis = await analyzeDocumentText(parsed.text);
+      analysis = {
+        ...analysis,
+        topics: await finalizeTopicsForUser(userId, analysis.topics),
+      };
       logger.info(
         {
           userId,
