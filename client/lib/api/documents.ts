@@ -297,6 +297,31 @@ export function getDocumentFileUrl(id: string): string {
   return `${getApiBaseUrl()}/documents/${id}/file`;
 }
 
+/** Authenticated blob download for inline image/PDF previews. */
+export async function fetchDocumentFileBlob(id: string): Promise<Blob> {
+  const response = await api.get<Blob>(`/documents/${id}/file`, {
+    responseType: 'blob',
+  });
+
+  return response.data;
+}
+
+export function isImageMimeType(mimeType: string): boolean {
+  return mimeType.startsWith('image/');
+}
+
+export function isPdfMimeType(mimeType: string, filename?: string): boolean {
+  if (mimeType === 'application/pdf') {
+    return true;
+  }
+
+  return Boolean(filename?.toLowerCase().endsWith('.pdf'));
+}
+
+export function canPreviewDocument(mimeType: string, filename?: string): boolean {
+  return isImageMimeType(mimeType) || isPdfMimeType(mimeType, filename);
+}
+
 export function getUploadErrorMessage(error: unknown): string {
   return getApiErrorMessage(error, 'Upload failed. Please try again.');
 }

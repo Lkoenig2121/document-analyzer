@@ -1,4 +1,9 @@
-export function getFileTypeLabel(filename: string): string {
+export function getFileTypeLabel(filename: string, mimeType?: string): string {
+  if (mimeType?.startsWith('image/')) {
+    const subtype = mimeType.slice('image/'.length).toUpperCase();
+    return subtype || 'IMAGE';
+  }
+
   const extension = filename.slice(filename.lastIndexOf('.')).toLowerCase();
 
   switch (extension) {
@@ -8,6 +13,12 @@ export function getFileTypeLabel(filename: string): string {
       return 'DOCX';
     case '.txt':
       return 'TXT';
+    case '.png':
+    case '.jpg':
+    case '.jpeg':
+    case '.webp':
+    case '.gif':
+      return extension.replace('.', '').toUpperCase();
     default:
       return extension.replace('.', '').toUpperCase() || 'FILE';
   }

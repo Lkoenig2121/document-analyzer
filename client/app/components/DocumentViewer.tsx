@@ -4,11 +4,16 @@ import { useState } from 'react';
 import AnalysisSection from '@/app/components/analysis/AnalysisSection';
 import BadgeList from '@/app/components/analysis/BadgeList';
 import ExtractedDataPanel from '@/app/components/analysis/ExtractedDataPanel';
+import DocumentPreview from '@/app/components/documents/DocumentPreview';
 import Card from '@/app/components/ui/Card';
 import EmptyState from '@/app/components/ui/EmptyState';
 import ErrorMessage from '@/app/components/ui/ErrorMessage';
 import LoadingState from '@/app/components/ui/LoadingState';
-import { analyzeDocument, getApiErrorMessage } from '@/lib/api';
+import {
+  analyzeDocument,
+  canPreviewDocument,
+  getApiErrorMessage,
+} from '@/lib/api';
 import { formatUploadedDate, getFileTypeLabel } from '@/lib/document-format';
 import { useDocument } from '@/lib/hooks/useDocument';
 
@@ -41,7 +46,7 @@ export default function DocumentViewer({ documentId }: DocumentViewerProps) {
   }
 
   const { document, content, analysis } = data;
-  const fileType = getFileTypeLabel(document.filename);
+  const fileType = getFileTypeLabel(document.filename, document.mimeType);
   const uploadedDate = formatUploadedDate(document.uploadedAt);
   const text = content.text.trim();
   const summary = analysis?.summary?.trim() ?? '';
@@ -50,6 +55,7 @@ export default function DocumentViewer({ documentId }: DocumentViewerProps) {
   const extractedData = analysis?.extractedData ?? {};
   const hasExtractedData = Object.keys(extractedData).length > 0;
   const hasAnalysis = Boolean(summary || topics.length || entities.length || hasExtractedData);
+  const showPreview = canPreviewDocument(document.mimeType, document.filename);
 
   async function handleAnalyze() {
     setAnalyzeError(null);
@@ -94,6 +100,16 @@ export default function DocumentViewer({ documentId }: DocumentViewerProps) {
       </div>
 
       {analyzeError ? <ErrorMessage message={analyzeError} /> : null}
+
+      {showPreview ? (
+        <Card>
+          <DocumentPreview
+            documentId={document.id}
+            mimeType={document.mimeType}
+            filename={document.filename}
+          />
+        </Card>
+      ) : null}
 
       <Card className="flex flex-col gap-6">
         <AnalysisSection title="AI Summary">
